@@ -32,21 +32,36 @@
     estonia: "https://sb.err.ee/live/raadio2.m3u8",
     latvia: "https://live.pieci.lv/live19-hq.aac",
     lithuania: "http://lrt-cast.lrt.lt:8000/lrt_opus",
-    croatia: "https://playerservices.streamtheworld.com/api/livestream-redirect/PROGRAM2AAC.aac",
-    bosnia: "https://pstnet7.shoutcastnet.com:10034/stream"
+    croatia:
+      "https://playerservices.streamtheworld.com/api/livestream-redirect/PROGRAM2AAC.aac",
+    bosnia: "https://pstnet7.shoutcastnet.com:10034/stream",
   };
 
   let width, height;
   let transform = d3.zoomIdentity;
-
   let imageSize = 25; // Default size for images
+  let svgElement;
+  let zoomBehavior;
+  const defaultCountryFill = "#1B1A1B";
+  const selectedCountryFill = "#3A383A";
+  const hoverCountryFill = "red";
+  let selectedCountryName;
+  let hoveredCountryName;
 
   $: imageSize = width < 600 ? 15 : 25; // Adjust size based on screen width
 
   let geojson;
   d3.json("europe.json").then((data) => (geojson = data));
 
-  $: projection = d3.geoOrthographic().fitSize([width, height], geojson);
+  $: projection = d3
+    .geoOrthographic()
+    .rotate([-15, -54])
+    .translate([width / 2, height / 2])
+    .scale(Math.min(width, height) * 1.5)
+    .clipAngle(90)
+    .precision(0.3);
+
+
   $: pathGenerator = d3.geoPath(projection);
 
   let countries = [];
@@ -61,38 +76,43 @@
     });
 
   function smoothZoom(newTransform) {
-    const interpolate = d3.interpolateTransformSvg(transform, newTransform);
-    d3.transition()
+    if (!svgElement || !zoomBehavior) {
+      transform = newTransform;
+      return;
+    }
+
+    d3.select(svgElement)
+      .transition()
       .duration(750)
-      .tween("zoom", () => (t) => {
-        transform = interpolate(t);
-      });
+      .call(zoomBehavior.transform, newTransform);
   }
 
-  let selectedCountry;
   function handleClick(e) {
-    selectedCountry = e.properties.NAME;
-    if (selectedCountry == "United Kingdom") {
-      selectedCountry = "uk";
+    const countryName = e.properties.NAME;
+    selectedCountryName = countryName;
+
+    let streamCountryKey = countryName;
+    if (streamCountryKey == "United Kingdom") {
+      streamCountryKey = "uk";
     }
-    if (selectedCountry == "Czech Republic") {
-      selectedCountry = "czech";
+    if (streamCountryKey == "Czech Republic") {
+      streamCountryKey = "czech";
     }
-    if (selectedCountry == "Bosnia and Herzegovina") {
-      selectedCountry = "bosnia"
+    if (streamCountryKey == "Bosnia and Herzegovina") {
+      streamCountryKey = "bosnia";
     }
 
-    const streamUrl = streams[selectedCountry.toLowerCase()];
+    const streamUrl = streams[streamCountryKey.toLowerCase()];
     if (streamUrl) {
       playStream(streamUrl);
     } else {
-      console.error(`No stream available for ${selectedCountry}`);
+      console.error(`No stream available for ${streamCountryKey}`);
     }
 
     const [[x0, y0], [x1, y1]] = e.bounds;
     const newTransform = d3.zoomIdentity
       .translate(width / 2, height / 2)
-      .scale(Math.min(8, 0.9 / Math.max((x1 - x0) / width, (y1 - y0) / height)))
+      .scale(Math.min(3, 0.9 / Math.max((x1 - x0) / width, (y1 - y0) / height)))
       .translate(-(x0 + x1) / 2, -(y0 + y1) / 2);
 
     smoothZoom(newTransform);
@@ -133,17 +153,34 @@
     }
   }
 
+  $: if (svgElement && width && height) {
+    zoomBehavior = d3
+      .zoom()
+      .scaleExtent([1, 8])
+      .translateExtent([
+        [0, 0],
+        [width, height],
+      ])
+      .on("zoom", (event) => {
+        transform = event.transform;
+      });
+
+    d3.select(svgElement).call(zoomBehavior);
+  }
+
   onMount(() => {
     window.addEventListener("keydown", handleEscape);
     return () => window.removeEventListener("keydown", handleEscape);
   });
 
-  function handleMouseEnter(event) {
-    event.target.style.fill = "red";
+  function handleMouseEnter(country) {
+    hoveredCountryName = country.properties.NAME;
   }
 
-  function handleMouseLeave(event) {
-    event.target.style.fill = "#1B1A1B";
+  function handleMouseLeave(country) {
+    if (hoveredCountryName === country.properties.NAME) {
+      hoveredCountryName = undefined;
+    }
   }
 </script>
 
@@ -151,20 +188,24 @@
   <main bind:clientWidth={width} bind:clientHeight={height}>
     <audio bind:this={audioElement} controls autoplay></audio>
 
-    <svg {width} {height}>
-      <g {transform}>
+    <svg bind:this={svgElement} {width} {height}>
+      <g transform={transform}>
         {#each countries as country}
           <path
-            fill="#1B1A1B"
-            stroke="gray"
-            stroke-width="0.2"
+            fill={hoveredCountryName === country.properties.NAME
+              ? hoverCountryFill
+              : selectedCountryName === country.properties.NAME
+                ? selectedCountryFill
+                : defaultCountryFill}
+            stroke="white"
+            stroke-width="0.05"
             d={country.path}
             role="button"
             aria-label={`Select ${country.properties.NAME}`}
             tabindex="0"
             on:click={() => handleClick(country)}
-            on:mouseenter={handleMouseEnter}
-            on:mouseleave={handleMouseLeave}
+            on:mouseenter={() => handleMouseEnter(country)}
+            on:mouseleave={() => handleMouseLeave(country)}
             on:keydown={(event) => {
               if (event.key === "Enter" || event.key === " ") {
                 handleClick(country);
@@ -172,7 +213,7 @@
               }
             }}
           ></path>
-          <image
+          <!-- <image
             on:click={() => handleClick(country)}
             on:keydown={(event) => {
               if (event.key === "Enter" || event.key === " ") {
@@ -187,7 +228,7 @@
             role="button"
             tabindex="0"
             aria-label={`Play radio for ${country.properties.NAME}`}
-          />
+          /> -->
         {/each}
       </g>
     </svg>
@@ -207,8 +248,7 @@
     top: 5px;
   }
   /* Remove focus outline for mouse users */
-  path:focus,
-  image:focus {
+  path:focus {
     outline: none;
   }
 </style>
